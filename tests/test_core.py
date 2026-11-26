@@ -134,18 +134,18 @@ def test_verdict_texts():
     p = scraper.normalize(RAW)
     state, _ = history.update({}, [p], "2026-11-26")
     say, pts = build_site.verdict(state["157668"], "2026-11-26", NOW)
-    assert say == "正在特價" and "$3,200" in pts[0] and "只有 1 天資料" in pts[-1]
+    assert say == "線上特價中" and "$3,200" in pts[0] and "只有 1 天資料" in pts[-1]
     # 下架
     say, _ = build_site.verdict(state["157668"], "2026-11-27", NOW)
     assert "沒有列出" in say
     # 追蹤夠久、比最低價貴
     r = {**state["157668"], "promo_amount": None, "first_seen": "2026-10-01", "min_price": 11000.0, "max_price": 12499.0}
     say, pts = build_site.verdict(r, "2026-11-26", NOW)
-    assert say == "目前是一般價格" and "貴 $1,499" in pts[-1]
+    assert say == "線上是一般價格" and "貴 $1,499" in pts[-1]
     # 追蹤夠久、是最低價
     r = {**r, "min_price": 12499.0, "max_price": 13000.0}
     say, _ = build_site.verdict(r, "2026-11-26", NOW)
-    assert say == "本站記錄最低價"
+    assert say == "線上是本站記錄最低價"
 
 
 def test_product_page_related_and_search_data(tmp_path):
@@ -213,3 +213,20 @@ def test_build_with_store_deals(tmp_path):
     assert 'data-ch="s"' in index and "賣場特價（11/30 起）" in index
     page = (out / "p" / "157668.html").read_text(encoding="utf-8")
     assert "storebox" in page and "賣場特價11/30 開始" in page and "$3,489" in page
+
+
+def test_store_discount_corrected_by_online_same_period():
+    """官網 11/30 檔期頁寫省 $860、PDF 印 $850：線上同檔期折扣上線後以線上金額校正。"""
+    online = {**RAW, "discountPrice": {"value": 860.0}, "couponDiscount": None,
+              "discountStartDate": "2026-11-29T16:00:00.000Z", "discountEndDate": "2026-12-20T15:59:59.999Z"}
+    state, _ = history.update({}, [scraper.normalize(online)], "2026-11-30")
+    item = _store_item(original=3999, discount=850, price=3149)
+    d = build_site.compute_store_deals([item], state, "2026-11-30")[0]
+    assert (d["a"], d["p"], d["fx"]) == (860.0, 3139.0, 850)
+    # 檔期不同（例如黑色購物週的線上折扣）就不校正
+    other = {**online, "discountStartDate": "2026-11-22T16:00:00.000Z", "discountEndDate": "2026-11-29T15:59:59.999Z"}
+    state2, _ = history.update({}, [scraper.normalize(other)], "2026-11-26")
+    d2 = build_site.compute_store_deals([item], state2, "2026-11-26")[0]
+    assert (d2["a"], d2["p"], d2["fx"]) == (850, 3149, None)
+    box = build_site.store_box(d)
+    assert "PDF 印的折扣是 $850" in box

@@ -100,10 +100,20 @@ def compute_store_deals(items: list[dict], state: dict, today: str) -> list[dict
         code = next((c for c in it["codes"] if c in state), it["codes"][0])
         r = state.get(code) or {}
         status = "now" if it["start"] <= today else "next"
+        original, discount, price, fixed = it["original"], it["discount"], it["price"], None
+        # 賣場與線上同一檔期的折扣金額相同：線上折扣已上線且金額不同時，以線上（每日更新）為準
+        ps, pe = parse_utc(r.get("promo_start")), parse_utc(r.get("promo_end"))
+        if (it.get("online_also") and r.get("promo_amount") and ps and pe
+                and ps.astimezone(TW).strftime("%Y-%m-%d") == it["start"]
+                and pe.astimezone(TW).strftime("%Y-%m-%d") == it["end"]
+                and r["promo_amount"] != discount and 0 < r["promo_amount"] < original):
+            fixed = discount
+            discount = r["promo_amount"]
+            price = original - discount
         d = {
             "ch": "s", "c": code, "n": r.get("name") or it.get("name") or f"商品 {code}",
-            "p": it["price"], "b": it["original"], "a": it["discount"],
-            "ap": round(it["discount"] / it["original"] * 100, 1) if it["original"] else None,
+            "p": price, "b": original, "a": discount, "fx": fixed,
+            "ap": round(discount / original * 100, 1) if original else None,
             "e": f"{it['end']}T15:59:59Z",  # 台灣時間當天 23:59:59
             "sd": it["start"], "ed": it["end"], "st": status, "wk": bool(it.get("weekday_only")),
             "oa": bool(it.get("online_also")), "k": category_key(r.get("url")), "pg": bool(r),
@@ -611,16 +621,16 @@ def verdict(r: dict, today: str, now: datetime) -> tuple[str, list[str]]:
     if promo_active:
         base = r.get("base_price")
         pct = f"（{promo / base * 100:.0f}%）" if base else ""
-        points.append(f"正在特價，比原價便宜 {money(promo)}{pct}，{fmt_end(r.get('promo_end'))} 前有效。")
+        points.append(f"線上正在特價，比原價便宜 {money(promo)}{pct}，{fmt_end(r.get('promo_end'))} 前有效。")
         if end and end - now <= timedelta(days=2):
             points.append("活動快結束了。")
-        say = "正在特價"
+        say = "線上特價中"
     elif r.get("prev_price") and r["prev_price"] > price:
-        points.append(f"{r.get('changed_on')} 降價，比之前便宜 {money(r['prev_price'] - price)}。")
-        say = "最近有降價"
+        points.append(f"線上 {r.get('changed_on')} 降價，比之前便宜 {money(r['prev_price'] - price)}。")
+        say = "線上最近有降價"
     else:
-        points.append("目前沒有特價。")
-        say = "目前是一般價格"
+        points.append("線上目前沒有特價。")
+        say = "線上是一般價格"
     first = r.get("first_seen") or today
     days = (datetime.strptime(today, "%Y-%m-%d") - datetime.strptime(first, "%Y-%m-%d")).days + 1
     mn, mx = r.get("min_price"), r.get("max_price")
@@ -628,7 +638,7 @@ def verdict(r: dict, today: str, now: datetime) -> tuple[str, list[str]]:
         points.append(f"本站從 {first} 開始記錄這件商品，目前只有 {days} 天資料，還看不出長期價格高低。")
     elif mn is not None and price <= mn and mx and mx > price:
         points.append(f"這是本站記錄 {days} 天以來的最低價。")
-        say = "本站記錄最低價"
+        say = "線上是本站記錄最低價"
     elif mn is not None and price > mn:
         points.append(f"比本站記錄的最低價 {money(mn)} 貴 {money(price - mn)}，不急的話可以再等等。")
     else:
@@ -643,6 +653,9 @@ def store_box(sd: dict | None) -> str:
     when = f"{md(sd['sd'])}–{md(sd['ed'])}" + ("（平日限定，週六日不適用）" if sd["wk"] else "")
     status = "進行中" if sd["st"] == "now" else f"{md(sd['sd'])} 開始"
     also = "<p class='fine'>線上購物也有優惠，售價以官網為準。</p>" if sd["oa"] else ""
+    if sd.get("fx") is not None:
+        also += (f"<p class='fine'>會員護照 PDF 印的折扣是 {money(sd['fx'])}，與官網同期線上折扣 {money(sd['a'])} 不同，"
+                 "這裡採用官網線上的金額。</p>")
     return (f"<div class='storebox'><h2>賣場特價・{esc(status)}</h2>"
             f"<div><span class='now'>{money(sd['p'])}</span><s>{money(sd['b'])}</s></div>"
             f"<div class='row'><span class='save'>省 {money(sd['a'])}<b> {sd['ap']:.0f}%</b></span></div>"
@@ -672,8 +685,7 @@ def build_product(code: str, r: dict, hist: list[tuple[str, float]], today: str,
         when = "進行中" if store_deal["st"] == "now" else f"{md(store_deal['sd'])} 開始"
         points.insert(0, f"賣場特價{when}：會員護照賣場售價 {money(store_deal['p'])}，省 {money(store_deal['a'])}，"
                          f"到 {md(store_deal['ed'])}。")
-        if store_deal["st"] == "now":
-            say = "賣場特價中"
+        say = "賣場特價中" if store_deal["st"] == "now" else f"賣場 {md(store_deal['sd'])} 起特價"
     pts = "".join(f"<li>{esc(p)}</li>" for p in points)
     changes = sorted(hist, reverse=True)[:8]
     table = ""
