@@ -2,10 +2,7 @@ name: probe-mvm
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - "tools/dump_mvm_words.py"
-      - ".github/workflows/probe_mvm.yml"
+  # push: 已停用（探測完成）
 
 permissions:
   contents: write

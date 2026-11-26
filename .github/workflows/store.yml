@@ -1,0 +1,52 @@
+name: store
+
+# 只更新賣場特價（會員護照 PDF）並重新發布網站，不抓線上商品價格。
+# 會員護照新一期公布時可以手動執行。
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests pytest pdfplumber
+      - name: 自動測試
+        run: python -m pytest -q tests
+      - name: 會員護照（賣場特價）
+        run: python src/mvm.py
+      - name: 產生網站
+        run: python src/build_site.py
+      - name: 保存資料
+        run: |
+          git config user.name "tw-deal-tracker-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/store_deals.json
+          git diff --cached --quiet || git commit -m "賣場特價更新 $(date -u +%F)"
+          git push
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: update
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

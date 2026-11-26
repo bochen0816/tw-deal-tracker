@@ -7,6 +7,8 @@ on:
     branches: [main]
     paths:
       - "src/build_site.py"
+      - "src/mvm.py"
+      - "data/store_deals.json"
       - ".github/workflows/site.yml"
   workflow_dispatch:
 
@@ -28,7 +30,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install requests pytest
+      - run: pip install requests pytest pdfplumber
       - name: 自動測試
         run: python -m pytest -q tests
       - name: 產生網站

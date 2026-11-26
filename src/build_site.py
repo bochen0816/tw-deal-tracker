@@ -85,9 +85,36 @@ def compute_deals(state: dict, today: str, now: datetime) -> list[dict]:
             "a": promo if promo_active else None, "ap": promo_pct,
             "e": r.get("promo_end") if promo_active else None, "ef": fmt_end(r.get("promo_end")) if promo_active else "",
             "pp": prev if drop_pct is not None else None, "d": drop_pct, "dc": changed if drop_pct is not None else None,
-            "low": is_low, "g": r.get("group") or "", "k": category_key(r.get("url")),
+            "low": is_low, "g": r.get("group") or "", "k": category_key(r.get("url")), "ch": "o",
         })
     deals.sort(key=lambda x: -(max(x["ap"] or 0, x["d"] or 0)))
+    return deals
+
+
+def compute_store_deals(items: list[dict], state: dict, today: str) -> list[dict]:
+    """會員護照的賣場特價 → 與線上特價相同格式的清單（ch="s"）。只收尚未結束的。"""
+    best: dict[str, dict] = {}
+    for it in items:
+        if it.get("channel") != "store" or not it.get("end") or it["end"] < today:
+            continue
+        code = next((c for c in it["codes"] if c in state), it["codes"][0])
+        r = state.get(code) or {}
+        status = "now" if it["start"] <= today else "next"
+        d = {
+            "ch": "s", "c": code, "n": r.get("name") or it.get("name") or f"商品 {code}",
+            "p": it["price"], "b": it["original"], "a": it["discount"],
+            "ap": round(it["discount"] / it["original"] * 100, 1) if it["original"] else None,
+            "e": f"{it['end']}T15:59:59Z",  # 台灣時間當天 23:59:59
+            "sd": it["start"], "ed": it["end"], "st": status, "wk": bool(it.get("weekday_only")),
+            "oa": bool(it.get("online_also")), "k": category_key(r.get("url")), "pg": bool(r),
+            "pp": None, "d": None, "dc": None, "low": False, "g": "",
+        }
+        old = best.get(code)
+        # 同一商品有多個檔期：優先顯示進行中的，其次最早開始的
+        if old is None or (d["st"], d["sd"]) < (old["st"], old["sd"]):
+            best[code] = d
+    deals = list(best.values())
+    deals.sort(key=lambda x: -(x["ap"] or 0))
     return deals
 
 
@@ -231,6 +258,16 @@ background:linear-gradient(-45deg,transparent 7px,var(--paper) 0) 0 0/14px 10px,
 .status{display:flex;justify-content:space-between;align-items:center;color:var(--muted);font-size:.92rem;margin:16px 0 12px;gap:12px}
 .status button{font:inherit;background:none;border:0;color:var(--ink);text-decoration:underline;cursor:pointer;padding:0}
 
+.channels{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px}
+.channels button{font:inherit;font-size:1.1rem;font-weight:900;padding:12px;border:2px solid var(--ink);border-radius:6px;background:var(--paper);color:var(--ink);cursor:pointer}
+.channels button[aria-pressed=true]{background:var(--ink);color:#fff}
+.channels small{font:700 1.1rem var(--num);margin-left:8px;opacity:.75}
+.storebox{background:var(--paper);border:2px solid var(--save);border-radius:6px;padding:18px 20px;margin-bottom:20px}
+.storebox h2{font-size:1rem;margin:0 0 6px;color:var(--save)}
+.storebox .now{font-size:2.6rem}
+.storebox s{font:600 1.2rem var(--num);color:var(--muted);margin-left:10px}
+.lbl{margin:0 0 6px;font-weight:700;color:var(--muted);font-size:.92rem}
+
 /* 價格牌 */
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(232px,1fr));gap:16px}
 .tag{display:flex;flex-direction:column;background:var(--paper);border-radius:6px;text-decoration:none;overflow:hidden;border:1px solid var(--line)}
@@ -341,19 +378,24 @@ const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>'
 const left = d => d.e ? (Date.parse(d.e) - NOW) / DAY : null;
 const saving = d => d.a || (d.pp ? d.pp - d.p : 0);
 const SCOPES = {
-  promo: {label: '特價中', test: d => d.a},
-  soon:  {label: '即將結束', test: d => d.a && left(d) !== null && left(d) <= 7},
-  drop:  {label: '最近降價', test: d => d.d},
-  all:   {label: '所有商品', test: () => true},
+  store:     {ch: 's', label: '進行中',   test: d => d.ch === 's' && d.st === 'now'},
+  storenext: {ch: 's', label: '即將開始', test: d => d.ch === 's' && d.st === 'next'},
+  promo:     {ch: 'o', label: '特價中',   test: d => d.ch === 'o' && d.a},
+  soon:      {ch: 'o', label: '即將結束', test: d => d.ch === 'o' && d.a && left(d) !== null && left(d) <= 7},
+  drop:      {ch: 'o', label: '最近降價', test: d => d.ch === 'o' && d.d},
+  all:       {ch: 'o', label: '所有商品', test: () => true},
 };
+const CH = {s: '賣場特價', o: '線上特價'};
+const DEFAULT = DEALS.some(SCOPES.store.test) ? 'store' : DEALS.some(SCOPES.storenext.test) ? 'storenext' : 'promo';
+const md = s => s ? s.slice(5).replace('-', '/') : '';
 const SORTS = {
   pct:   d => -(d.ap || d.d || 0),
   save:  d => -saving(d),
-  end:   d => d.e ? Date.parse(d.e) : 9e15,
+  end:   d => d.st === 'next' ? Date.parse(d.sd) : d.e ? Date.parse(d.e) : 9e15,
   price: d => d.p,
 };
 let ALL = null, loading = false;
-const st = {scope: 'promo', cat: '', q: '', sort: 'pct', shown: STEP};
+const st = {scope: DEFAULT, cat: '', q: '', sort: 'pct', shown: STEP};
 
 function readHash() {
   const h = new URLSearchParams(location.hash.slice(1));
@@ -364,7 +406,7 @@ function readHash() {
 }
 function writeHash() {
   const h = new URLSearchParams();
-  if (st.scope !== 'promo') h.set('scope', st.scope);
+  if (st.scope !== DEFAULT) h.set('scope', st.scope);
   if (st.cat) h.set('cat', st.cat);
   if (st.q) h.set('q', st.q);
   if (st.sort !== 'pct') h.set('sort', st.sort);
@@ -383,23 +425,34 @@ function matchQ(d) {
   return st.q.toLowerCase().split(/\s+/).every(t => n.includes(t));
 }
 function card(d) {
-  let badge = '';
+  let badge = '', notes = '', end = '';
   if (d.a) badge = `<span class="save">省 ${fmt(d.a)}<b> ${Math.round(d.ap)}%</b></span>`;
   else if (d.d) badge = `<span class="save">比上次便宜 ${fmt(d.pp - d.p)}</span>`;
   else if (d.low) badge = `<span class="note">本站紀錄最低價</span>`;
   else badge = `<span class="note">目前沒有特價</span>`;
   const l = left(d);
-  let end = '';
-  if (l !== null && d.a) end = `<span class="end${l <= 2 ? ' urgent' : ''}">${l < 1 ? '今天結束' : '剩 ' + Math.ceil(l) + ' 天'}</span>`;
+  if (d.ch === 's' && d.st === 'next') end = `<span class="end">${md(d.sd)} 開始</span>`;
+  else if (l !== null && d.a) end = `<span class="end${l <= 2 ? ' urgent' : ''}">${l < 1 ? '今天結束' : '剩 ' + Math.ceil(l) + ' 天'}</span>`;
+  if (d.wk) notes = '<span class="note">平日限定</span>';
   const was = d.a ? d.b : d.pp;
-  return `<a class="tag" href="p/${encodeURIComponent(d.c)}.html">
+  const href = d.ch === 's' && !d.pg ? `https://www.costco.com.tw/search?text=${encodeURIComponent(d.c)}` : `p/${encodeURIComponent(d.c)}.html`;
+  const ext = href.startsWith('http') ? ' target="_blank" rel="nofollow noopener"' : '';
+  return `<a class="tag" href="${href}"${ext}>
 <span class="tag-name">${esc(d.n)}</span>
 <span class="tag-label"><span class="now">${fmt(d.p)}</span>${was ? `<s>${fmt(was)}</s>` : ''}</span>
-<span class="tag-foot">${badge}${end}</span></a>`;
+<span class="tag-foot">${badge}${end}${notes}</span></a>`;
+}
+function renderChannels() {
+  const ch = SCOPES[st.scope].ch;
+  document.querySelectorAll('.channels button').forEach(b => b.setAttribute('aria-pressed', b.dataset.ch === ch));
+  $('#scopes').innerHTML = Object.entries(SCOPES).filter(([, s]) => s.ch === ch).map(([k, s]) => {
+    const n = k === 'all' ? '' : `<small>${DEALS.filter(s.test).length}</small>`;
+    return `<button data-scope="${k}" aria-pressed="${k === st.scope}">${s.label}${n}</button>`;
+  }).join('');
 }
 function render() {
   writeHash();
-  document.querySelectorAll('.scopes button').forEach(b => b.setAttribute('aria-pressed', b.dataset.scope === st.scope));
+  renderChannels();
   $('#sort').value = st.sort;
   if ($('#q').value !== st.q) $('#q').value = st.q;
   const src = source();
@@ -412,16 +465,18 @@ function render() {
   $('#cats').innerHTML = [`<button data-cat="" aria-pressed="${!st.cat}">全部<small>${scoped.length}</small></button>`]
     .concat(keys.map(k => `<button data-cat="${k}" aria-pressed="${st.cat === k}">${esc(CATS[k])}<small>${counts[k]}</small></button>`)).join('');
   const list = scoped.filter(d => !st.cat || d.k === st.cat).sort((a, b) => SORTS[st.sort](a) - SORTS[st.sort](b));
-  const scopeName = SCOPES[st.scope].label;
+  const scopeName = CH[SCOPES[st.scope].ch] + SCOPES[st.scope].label;
   const parts = [scopeName];
   if (st.cat) parts.push(CATS[st.cat]);
   if (st.q) parts.push(`「${esc(st.q)}」`);
-  const filtered = st.scope !== 'promo' || st.cat || st.q;
+  const filtered = st.scope !== DEFAULT || st.cat || st.q;
   $('#status').innerHTML = `<span>${parts.join('，')}：共 ${list.length.toLocaleString('en-US')} 件</span>` +
     (filtered ? '<button id="reset">清除條件</button>' : '');
   if (!list.length) {
     const offer = st.scope === 'drop' && !st.q && !st.cat
       ? `<p>本站每天比對價格，比前一次便宜的商品會出現在這裡。<br>價格紀錄從 2026/11/26 開始累積，過幾天就會有資料。</p><button data-go="promo">先看特價中的商品</button>`
+      : st.scope === 'store' && !st.q && !st.cat && DEALS.some(SCOPES.storenext.test)
+      ? `<p>這一期賣場特價還沒開始。</p><button data-go="storenext">看即將開始的賣場特價</button>`
       : st.q && st.scope !== 'all'
       ? `<p>在「${scopeName}」裡找不到「${esc(st.q)}」。</p><button data-go="all">改搜尋所有商品</button>`
       : `<p>沒有符合條件的商品，試試其他關鍵字或分類。</p>`;
@@ -436,11 +491,15 @@ function render() {
 let timer;
 $('#q').addEventListener('input', e => { clearTimeout(timer); timer = setTimeout(() => { st.q = e.target.value.trim(); st.shown = STEP; render(); }, 150); });
 $('#sort').addEventListener('change', e => { st.sort = e.target.value; st.shown = STEP; render(); });
-$('.scopes').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; st.scope = b.dataset.scope; st.cat = ''; st.shown = STEP; if (st.scope === 'soon') st.sort = 'end'; render(); });
+$('.channels').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return;
+  const want = b.dataset.ch;
+  st.scope = want === 's' ? (DEALS.some(SCOPES.store.test) ? 'store' : 'storenext') : 'promo';
+  st.cat = ''; st.shown = STEP; render(); });
+$('#scopes').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; st.scope = b.dataset.scope; st.cat = ''; st.shown = STEP; if (st.scope === 'soon' || st.scope === 'storenext') st.sort = 'end'; render(); });
 $('#cats').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; st.cat = b.dataset.cat; st.shown = STEP; render(); });
 $('#more').addEventListener('click', () => { st.shown += STEP; render(); });
 document.addEventListener('click', e => {
-  if (e.target.id === 'reset') { Object.assign(st, {scope: 'promo', cat: '', q: '', sort: 'pct', shown: STEP}); render(); }
+  if (e.target.id === 'reset') { Object.assign(st, {scope: DEFAULT, cat: '', q: '', sort: 'pct', shown: STEP}); render(); }
   if (e.target.dataset && e.target.dataset.go) { st.scope = e.target.dataset.go; st.cat = ''; st.shown = STEP; render(); }
 });
 readHash();
@@ -448,53 +507,54 @@ render();
 """
 
 
-def receipt_stats(deals: list[dict], now: datetime, total: int) -> dict:
+def receipt_stats(deals: list[dict], store: list[dict], total: int) -> dict:
     promo = [d for d in deals if d["a"]]
-    soon = [d for d in promo if d["e"] and (parse_utc(d["e"]) - now) <= timedelta(days=7)]
-    ends = sorted({d["e"] for d in promo if d["e"]})
-    first_end = ends[0] if ends else None
-    first_end_n = sum(1 for d in promo if d["e"] == first_end) if first_end else 0
+    s_now = [d for d in store if d["st"] == "now"]
+    s_next = [d for d in store if d["st"] == "next"]
+    both = promo + store
     return {
         "promo": len(promo),
         "drop": sum(1 for d in deals if d["d"]),
-        "max_pct": max((d["ap"] for d in promo), default=0),
-        "max_save": max((d["a"] for d in promo), default=0),
-        "soon": len(soon),
-        "first_end": fmt_end(first_end) if first_end else "",
-        "first_end_n": first_end_n,
+        "store_now": len(s_now),
+        "store_next": len(s_next),
+        "store_next_start": min((d["sd"] for d in s_next), default=""),
+        "max_pct": max((d["ap"] or 0 for d in both), default=0),
+        "max_save": max((d["a"] or 0 for d in both), default=0),
         "total": total,
     }
 
 
 def build_index(deals: list[dict], meta: dict, root_out: str, stats: dict) -> None:
+    """deals 包含線上（ch=o）與賣場（ch=s）特價。"""
     date = meta.get("date_tw", "")
     date_show = date.replace("-", "/")
-    scopes = "".join(
-        f'<button data-scope="{k}" aria-pressed="false">{v}{f"<small>{n}</small>" if n is not None else ""}</button>'
-        for k, v, n in (("promo", "特價中", stats["promo"]), ("soon", "即將結束", stats["soon"]),
-                        ("drop", "最近降價", stats["drop"]), ("all", "所有商品", None)))
+    n_store = stats["store_now"] or stats["store_next"]
+    store_note = "" if stats["store_now"] else (f"（{stats['store_next_start'][5:].replace('-', '/')} 起）"
+                                                 if stats["store_next"] else "")
+    channels = (f'<button data-ch="s" aria-pressed="false">賣場特價<small>{n_store}</small></button>'
+                f'<button data-ch="o" aria-pressed="false">線上特價<small>{stats["promo"]}</small></button>')
     body = f"""
 <section class="hero">
   <div>
-    <h1>好市多線上特價，<br>每天幫你整理好</h1>
-    <p>每天清晨自動檢查好市多線上購物的商品價格，把正在特價的挑出來。折多少、什麼時候結束、現在買划不划算，一頁看完。</p>
+    <h1>好市多的特價，<br>每天幫你整理好</h1>
+    <p>賣場的會員護照優惠、線上購物的特價，每天清晨自動整理。折多少、什麼時候結束、現在買划不划算，一頁看完。</p>
     <a class="cta" href="#deals">看今天的特價</a>
   </div>
   <div class="receipt" aria-label="今日特價摘要">
     <h2>今日特價明細</h2>
     <div class="date">{esc(date_show)} 清晨更新</div>
     <dl>
-      <div><dt>特價中的商品</dt><dd>{stats['promo']:,} 件</dd></div>
+      <div><dt>賣場特價{esc(store_note)}</dt><dd>{n_store:,} 件</dd></div>
+      <div><dt>線上特價</dt><dd>{stats['promo']:,} 件</dd></div>
       <div><dt>最高折扣</dt><dd>{stats['max_pct']:.0f}%</dd></div>
       <div><dt>單件最多省</dt><dd>{money(stats['max_save'])}</dd></div>
-      <div><dt>最近一波結束</dt><dd>{esc(stats['first_end'].split(' ')[0]) or '—'}</dd></div>
-      <div><dt>屆時結束的商品</dt><dd>{stats['first_end_n']:,} 件</dd></div>
     </dl>
     <div class="total"><span>共檢查商品</span><span>{stats['total']:,} 件</span></div>
   </div>
 </section>
 
 <section id="deals" class="tools">
+  <div class="channels" role="group" aria-label="通路">{channels}</div>
   <div class="search">
     <input id="q" type="search" placeholder="想買什麼？例如：衛生紙、咖啡、氣炸鍋" aria-label="搜尋商品" autocomplete="off">
     <select id="sort" aria-label="排序方式">
@@ -502,7 +562,7 @@ def build_index(deals: list[dict], meta: dict, root_out: str, stats: dict) -> No
       <option value="end">最快結束</option><option value="price">價格低到高</option>
     </select>
   </div>
-  <div class="scopes" role="group" aria-label="顯示範圍">{scopes}</div>
+  <div class="scopes" id="scopes" role="group" aria-label="顯示範圍"></div>
   <div class="cats" id="cats" role="group" aria-label="商品分類"></div>
 </section>
 <div class="status" id="status"></div>
@@ -512,7 +572,7 @@ def build_index(deals: list[dict], meta: dict, root_out: str, stats: dict) -> No
 <section class="section" id="how">
   <h2>怎麼用</h2>
   <ol class="steps">
-    <li><strong>每天自動檢查價格</strong><span>每天清晨檢查好市多線上購物 {stats['total']:,} 件商品的價格，不用自己一頁一頁翻。</span></li>
+    <li><strong>每天自動檢查價格</strong><span>每天清晨檢查好市多官網的會員護照，和線上購物 {stats['total']:,} 件商品的價格，不用自己一頁一頁翻。</span></li>
     <li><strong>挑出特價與降價</strong><span>把正在特價、或比之前便宜的商品挑出來，標出省多少錢、還剩幾天。</span></li>
     <li><strong>點進去看值不值得買</strong><span>每件商品都有價格紀錄，看得出現在是不是好價格，再到官網下單。</span></li>
   </ol>
@@ -521,8 +581,9 @@ def build_index(deals: list[dict], meta: dict, root_out: str, stats: dict) -> No
 <section class="section faq" id="faq">
   <h2>常見問題</h2>
   <details><summary>這是好市多的官方網站嗎？</summary><p>不是。這是個人製作的整理網站，和好市多沒有任何關係，也不賣東西。要買請點商品頁的「到好市多官網購買」。</p></details>
+  <details><summary>賣場特價的資料從哪裡來？</summary><p>來自好市多官網公布的會員護照（會員皮夾）優惠，列出的是官方標示的賣場售價與優惠期間。各賣場的庫存、實際售價以現場為準；標示「平日限定」的商品，週六日不適用。</p></details>
   <details><summary>價格準嗎？</summary><p>每天清晨更新一次，白天官網若調整價格，這裡要到隔天才會反映。實際價格和活動條件以好市多官網為準。</p></details>
-  <details><summary>為什麼有些商品找不到？</summary><p>只收錄「好市多線上購物」不用登入就看得到價格的商品。實體賣場的價格、需要登入才看得到的價格，這裡都沒有。</p></details>
+  <details><summary>為什麼有些商品找不到？</summary><p>賣場商品只收錄會員護照上的優惠品項；線上商品只收錄不用登入就看得到價格的。賣場平常的價格、需要登入才看得到的價格，這裡都沒有。</p></details>
   <details><summary>價格紀錄為什麼很短？</summary><p>本站從 2026/11/26 開始記錄價格，之後每天累積。記錄越久，越能看出現在的價格是高還是低。</p></details>
 </section>
 
@@ -530,10 +591,10 @@ def build_index(deals: list[dict], meta: dict, root_out: str, stats: dict) -> No
 <script type="application/json" id="cat-data">{safe_json(CAT_LABELS_ALL)}</script>
 <script>{INDEX_JS}</script>
 """
-    desc = (f"好市多線上購物今天有 {stats['promo']} 件特價，最高折 {stats['max_pct']:.0f}%。"
-            "每天自動整理，標出省多少、還剩幾天，附價格紀錄。")
+    desc = (f"好市多賣場特價 {n_store} 件、線上特價 {stats['promo']} 件，最高折 {stats['max_pct']:.0f}%。"
+            "每天自動整理會員護照與線上購物優惠，標出省多少、還剩幾天，附價格紀錄。")
     with open(os.path.join(root_out, "index.html"), "w", encoding="utf-8") as f:
-        f.write(page(f"好市多線上特價整理｜{SITE_NAME}", body, desc, SITE_BASE + "/", ""))
+        f.write(page(f"好市多特價整理（賣場＋線上）｜{SITE_NAME}", body, desc, SITE_BASE + "/", ""))
 
 
 def verdict(r: dict, today: str, now: datetime) -> tuple[str, list[str]]:
@@ -575,8 +636,21 @@ def verdict(r: dict, today: str, now: datetime) -> tuple[str, list[str]]:
     return say, points
 
 
+def store_box(sd: dict | None) -> str:
+    if not sd:
+        return ""
+    md = lambda s: s[5:].replace("-", "/")  # noqa: E731
+    when = f"{md(sd['sd'])}–{md(sd['ed'])}" + ("（平日限定，週六日不適用）" if sd["wk"] else "")
+    status = "進行中" if sd["st"] == "now" else f"{md(sd['sd'])} 開始"
+    also = "<p class='fine'>線上購物也有優惠，售價以官網為準。</p>" if sd["oa"] else ""
+    return (f"<div class='storebox'><h2>賣場特價・{esc(status)}</h2>"
+            f"<div><span class='now'>{money(sd['p'])}</span><s>{money(sd['b'])}</s></div>"
+            f"<div class='row'><span class='save'>省 {money(sd['a'])}<b> {sd['ap']:.0f}%</b></span></div>"
+            f"<p class='fine'>優惠期間 {esc(when)}。會員護照賣場售價，各賣場以現場為準。</p>{also}</div>")
+
+
 def build_product(code: str, r: dict, hist: list[tuple[str, float]], today: str, now: datetime,
-                  out_dir: str, related: list[dict]) -> None:
+                  out_dir: str, related: list[dict], store_deal: dict | None = None) -> None:
     price, base = r.get("price"), r.get("base_price")
     end = parse_utc(r.get("promo_end"))
     promo_active = bool(r.get("promo_amount")) and (end is None or end > now)
@@ -593,6 +667,13 @@ def build_product(code: str, r: dict, hist: list[tuple[str, float]], today: str,
         row = f'<div class="row"><span class="save">省 {money(r["promo_amount"])}<b>{pct}</b></span>{endtxt}</div>'
     was = f"<s>{money(base)}</s>" if promo_active and base and base != price else ""
     say, points = verdict(r, today, now)
+    if store_deal:
+        md = lambda s: s[5:].replace("-", "/")  # noqa: E731
+        when = "進行中" if store_deal["st"] == "now" else f"{md(store_deal['sd'])} 開始"
+        points.insert(0, f"賣場特價{when}：會員護照賣場售價 {money(store_deal['p'])}，省 {money(store_deal['a'])}，"
+                         f"到 {md(store_deal['ed'])}。")
+        if store_deal["st"] == "now":
+            say = "賣場特價中"
     pts = "".join(f"<li>{esc(p)}</li>" for p in points)
     changes = sorted(hist, reverse=True)[:8]
     table = ""
@@ -613,7 +694,9 @@ def build_product(code: str, r: dict, hist: list[tuple[str, float]], today: str,
       <p class="fine">價格只在變動時記錄，從本站開始追蹤那天算起。</p></section>
   </div>
   <aside>
-    <div class="bigtag"><span class="now">{money(price) if price is not None else '需登入'}</span>{was}{row}</div>
+    {store_box(store_deal)}
+    <p class="lbl">線上購物售價</p>
+    <div class="bigtag"><span class="now">{money(price) if price is not None else '官網未公開'}</span>{was}{row}</div>
     <a class="buy" href="{esc(r.get('url'))}" rel="nofollow noopener" target="_blank">到好市多官網購買</a>
     <p class="fine">會開啟好市多官網。價格與活動以官網為準。商品編號 {esc(code)}</p>
   </aside>
@@ -633,13 +716,18 @@ def _static_card(d: dict, now: datetime) -> str:
                   f'{"今天結束" if left < 1 else f"剩 {math.ceil(left)} 天"}</span>')
     badge = (f'<span class="save">省 {money(d["a"])}<b> {d["ap"]:.0f}%</b></span>' if d.get("a")
              else f'<span class="save">比上次便宜 {money(d["pp"] - d["p"])}</span>' if d.get("d") else "")
+    if d.get("ch") == "s" and d.get("st") == "next":
+        endtxt = f'<span class="end">{esc(d["sd"][5:].replace("-", "/"))} 開始</span>'
+    if d.get("ch") == "s":
+        endtxt += '<span class="note">賣場</span>'
     was = d["b"] if d.get("a") else d.get("pp")
     return (f'<a class="tag" href="{esc(d["c"])}.html"><span class="tag-name">{esc(d["n"])}</span>'
             f'<span class="tag-label"><span class="now">{money(d["p"])}</span>{f"<s>{money(was)}</s>" if was else ""}</span>'
             f'<span class="tag-foot">{badge}{endtxt}</span></a>')
 
 
-def build(state: dict, history: dict, meta: dict, out: str, now: datetime | None = None) -> dict:
+def build(state: dict, history: dict, meta: dict, out: str, now: datetime | None = None,
+          store_items: list[dict] | None = None) -> dict:
     now = now or datetime.now(timezone.utc)
     today = meta["date_tw"]
     if os.path.exists(out):
@@ -647,10 +735,12 @@ def build(state: dict, history: dict, meta: dict, out: str, now: datetime | None
     pdir = os.path.join(out, "p")
     os.makedirs(pdir)
     deals = compute_deals(state, today, now)
+    store = compute_store_deals(store_items or [], state, today)
+    store_by_code = {d["c"]: d for d in store}
     by_code = {d["c"]: d for d in deals}
     by_cat: dict[str, list[dict]] = defaultdict(list)
-    for d in deals:
-        if d["a"] or d["d"]:
+    for d in store + deals:
+        if (d["a"] or d["d"]) and d.get("pg", True):
             by_cat[d["k"]].append(d)
     listed = []
     for code, r in state.items():
@@ -659,12 +749,12 @@ def build(state: dict, history: dict, meta: dict, out: str, now: datetime | None
                                       "a": None, "ap": None, "e": None, "pp": None, "d": None,
                                       "low": False, "k": category_key(r.get("url"))}
             listed.append({k: d.get(k) for k in ("c", "n", "p", "b", "a", "ap", "e", "pp", "d", "low", "k")})
-    stats = receipt_stats(deals, now, meta.get("unique_count") or len(state))
-    build_index(deals, meta, out, stats)
+    stats = receipt_stats(deals, store, meta.get("unique_count") or len(state))
+    build_index(store + deals, meta, out, stats)
     for code, r in state.items():
         k = category_key(r.get("url"))
         related = [d for d in by_cat.get(k, []) if d["c"] != code][:4]
-        build_product(code, r, history.get(code, []), today, now, pdir, related)
+        build_product(code, r, history.get(code, []), today, now, pdir, related, store_by_code.get(code))
     with open(os.path.join(out, "all.json"), "w", encoding="utf-8") as f:
         json.dump(listed, f, ensure_ascii=False, separators=(",", ":"))
     urls = [SITE_BASE + "/"] + [f"{SITE_BASE}/p/{c}.html" for c in sorted(state)]
@@ -677,7 +767,7 @@ def build(state: dict, history: dict, meta: dict, out: str, now: datetime | None
     with open(os.path.join(out, "style.css"), "w", encoding="utf-8") as f:
         f.write(CSS)
     open(os.path.join(out, ".nojekyll"), "w").close()
-    return {"deals": len(deals), "products": len(state), "listed": len(listed)}
+    return {"deals": len(deals), "store": len(store), "products": len(state), "listed": len(listed)}
 
 
 def main() -> int:
@@ -685,7 +775,11 @@ def main() -> int:
         state = json.load(f)
     with open("data/last_run.json", encoding="utf-8") as f:
         meta = json.load(f)
-    stats = build(state, load_history("data/history.csv"), meta, "site")
+    store_items = []
+    if os.path.exists("data/store_deals.json"):
+        with open("data/store_deals.json", encoding="utf-8") as f:
+            store_items = json.load(f).get("items", [])
+    stats = build(state, load_history("data/history.csv"), meta, "site", store_items=store_items)
     print(json.dumps(stats, ensure_ascii=False))
     return 0
 

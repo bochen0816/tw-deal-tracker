@@ -98,7 +98,7 @@ def test_build_site_outputs_and_escaping(tmp_path):
         hist.setdefault(c, []).append((d, v))
     out = tmp_path / "site"
     stats = build_site.build(state, hist, {"date_tw": "2026-11-26"}, str(out), now=NOW)
-    assert stats == {"deals": 2, "products": 2, "listed": 2}
+    assert stats == {"deals": 2, "store": 0, "products": 2, "listed": 2}
     index = (out / "index.html").read_text(encoding="utf-8")
     assert index.count("</script>") == 3  # 只有本站自己的三個 script（特價資料、分類、程式）
     assert "<script>alert(1)" not in index
@@ -177,3 +177,39 @@ def test_index_ids_unique(tmp_path):
     js_ids = set(re.findall(r"getElementById\('([^']+)'\)", index)) | set(re.findall(r"\$\('#([\w-]+)'\)", index))
     assert js_ids <= set(ids), js_ids - set(ids)
     assert "10,083 件" in index
+
+
+def _store_item(**kw):
+    base = {"codes": ["157668"], "name": "PDF 品名", "original": 4389, "discount": 900, "price": 3489,
+            "channel": "store", "online_also": True, "start": "2026-11-30", "end": "2026-12-20", "weekday_only": False}
+    base.update(kw)
+    return base
+
+
+def test_compute_store_deals_status_and_filters():
+    state, _ = history.update({}, [scraper.normalize(RAW)], "2026-11-26")
+    items = [
+        _store_item(),                                                      # 即將開始
+        _store_item(codes=["555"], start="2026-11-01", end="2026-11-22"),   # 已結束 → 不收
+        _store_item(codes=["777"], channel="online"),                       # 線上限定 → 不在賣場清單
+        _store_item(codes=["888"], start="2026-11-20", end="2026-11-28", weekday_only=True),  # 進行中
+    ]
+    out = {d["c"]: d for d in build_site.compute_store_deals(items, state, "2026-11-26")}
+    assert set(out) == {"157668", "888"}
+    a = out["157668"]
+    assert a["st"] == "next" and a["n"] == RAW["name"] and a["pg"] is True and a["ap"] == 20.5
+    assert a["e"] == "2026-12-20T15:59:59Z"  # 台灣時間 12/20 23:59:59
+    b = out["888"]
+    assert b["st"] == "now" and b["wk"] is True and b["pg"] is False and b["n"] == "PDF 品名"
+
+
+def test_build_with_store_deals(tmp_path):
+    state, _ = history.update({}, [scraper.normalize(RAW)], "2026-11-26")
+    out = tmp_path / "site"
+    stats = build_site.build(state, {}, {"date_tw": "2026-11-26"}, str(out), now=NOW,
+                             store_items=[_store_item(), _store_item(codes=["888"])])
+    assert stats["store"] == 2
+    index = (out / "index.html").read_text(encoding="utf-8")
+    assert 'data-ch="s"' in index and "賣場特價（11/30 起）" in index
+    page = (out / "p" / "157668.html").read_text(encoding="utf-8")
+    assert "storebox" in page and "賣場特價11/30 開始" in page and "$3,489" in page
