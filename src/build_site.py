@@ -122,18 +122,17 @@ def svg_chart(points: list[tuple[str, float]], today: str, width: int = 640, hei
     L, R, T, B = 70, 16, 14, 30
     W, H = width - L - R, height - T - B
 
-    def x(ds):
-        return L + (datetime.strptime(ds, "%Y-%m-%d") - d0).days / span * W
-
     def y(v):
         return T + (hi - v) / (hi - lo) * H
 
-    path = []
-    for i, (ds, v) in enumerate(pts):
-        if i == 0:
-            path.append(f"M{x(ds):.1f},{y(v):.1f}")
-        else:
-            path.append(f"H{x(ds):.1f}V{y(v):.1f}")
+    if d0 == d1:
+        # 只有一天資料：畫一條從左到右的水平線（否則線段長度為 0 看不見）
+        xs = [L, L + W]
+    else:
+        xs = [L + (datetime.strptime(ds, "%Y-%m-%d") - d0).days / span * W for ds, _ in pts]
+    path = [f"M{xs[0]:.1f},{y(pts[0][1]):.1f}"]
+    for xv, (_, v) in zip(xs[1:], pts[1:]):
+        path.append(f"H{xv:.1f}V{y(v):.1f}")
     mn, mx = min(prices), max(prices)
     labels = [(mx, money(mx))] if mn == mx else [(mx, money(mx)), (mn, money(mn))]
     ylab = "".join(

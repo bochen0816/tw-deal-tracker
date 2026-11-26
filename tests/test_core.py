@@ -114,3 +114,7 @@ def test_build_site_outputs_and_escaping(tmp_path):
 def test_svg_chart_single_point():
     svg = build_site.svg_chart([("2026-11-26", 100.0)], "2026-11-26")
     assert svg.startswith("<svg") and "$100" in svg
+    # 第一天線段必須有長度（曾經發生只有一天資料時線條看不見）
+    import re
+    d = re.search(r"d='M([\d.]+),[\d.]+H([\d.]+)", svg)
+    assert d and float(d.group(2)) - float(d.group(1)) > 100
