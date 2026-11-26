@@ -2,10 +2,7 @@ name: probe
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - "tools/probe.py"
-      - ".github/workflows/probe.yml"
+  # push: 已停用（探測完成）
 
 jobs:
   probe:
