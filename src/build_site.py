@@ -332,8 +332,8 @@ def page(title: str, body: str, desc: str, canonical: str, root: str) -> str:
 
 
 INDEX_JS = r"""
-const DEALS = JSON.parse(document.getElementById('deals').textContent);
-const CATS = JSON.parse(document.getElementById('cats').textContent);
+const DEALS = JSON.parse(document.getElementById('deal-data').textContent);
+const CATS = JSON.parse(document.getElementById('cat-data').textContent);
 const NOW = Date.now(), DAY = 864e5, STEP = 48;
 const $ = s => document.querySelector(s);
 const fmt = v => v == null ? '' : '$' + Math.round(v).toLocaleString('en-US');
@@ -476,7 +476,7 @@ def build_index(deals: list[dict], meta: dict, root_out: str, stats: dict) -> No
     body = f"""
 <section class="hero">
   <div>
-    <h1>好市多線上特價，每天幫你整理好</h1>
+    <h1>好市多線上特價，<br>每天幫你整理好</h1>
     <p>每天清晨自動檢查好市多線上購物的商品價格，把正在特價的挑出來。折多少、什麼時候結束、現在買划不划算，一頁看完。</p>
     <a class="cta" href="#deals">看今天的特價</a>
   </div>
@@ -526,8 +526,8 @@ def build_index(deals: list[dict], meta: dict, root_out: str, stats: dict) -> No
   <details><summary>價格紀錄為什麼很短？</summary><p>本站從 2026/11/26 開始記錄價格，之後每天累積。記錄越久，越能看出現在的價格是高還是低。</p></details>
 </section>
 
-<script type="application/json" id="deals">{safe_json(deals)}</script>
-<script type="application/json" id="cats">{safe_json(CAT_LABELS_ALL)}</script>
+<script type="application/json" id="deal-data">{safe_json(deals)}</script>
+<script type="application/json" id="cat-data">{safe_json(CAT_LABELS_ALL)}</script>
 <script>{INDEX_JS}</script>
 """
     desc = (f"好市多線上購物今天有 {stats['promo']} 件特價，最高折 {stats['max_pct']:.0f}%。"
@@ -659,7 +659,7 @@ def build(state: dict, history: dict, meta: dict, out: str, now: datetime | None
                                       "a": None, "ap": None, "e": None, "pp": None, "d": None,
                                       "low": False, "k": category_key(r.get("url"))}
             listed.append({k: d.get(k) for k in ("c", "n", "p", "b", "a", "ap", "e", "pp", "d", "low", "k")})
-    stats = receipt_stats(deals, now, len(listed))
+    stats = receipt_stats(deals, now, meta.get("unique_count") or len(state))
     build_index(deals, meta, out, stats)
     for code, r in state.items():
         k = category_key(r.get("url"))

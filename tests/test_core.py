@@ -161,3 +161,19 @@ def test_product_page_related_and_search_data(tmp_path):
     assert allj["157668"]["a"] == 3200.0 and allj["3"]["a"] is None and "k" in allj["3"]
     index = (out / "index.html").read_text(encoding="utf-8")
     assert "今日特價明細" in index and "共檢查商品" in index
+
+
+def test_index_ids_unique(tmp_path):
+    """曾發生：分類按鈕區與分類資料用了同一個 id，導致清單完全顯示不出來。"""
+    import re
+    from collections import Counter
+    state, _ = history.update({}, [scraper.normalize(RAW)], "2026-11-26")
+    out = tmp_path / "site"
+    build_site.build(state, {}, {"date_tw": "2026-11-26", "unique_count": 10083}, str(out), now=NOW)
+    index = (out / "index.html").read_text(encoding="utf-8")
+    ids = Counter(re.findall(r'\bid="([^"]+)"', index))
+    assert [k for k, v in ids.items() if v > 1] == []
+    # 程式裡用到的 id 都要存在
+    js_ids = set(re.findall(r"getElementById\('([^']+)'\)", index)) | set(re.findall(r"\$\('#([\w-]+)'\)", index))
+    assert js_ids <= set(ids), js_ids - set(ids)
+    assert "10,083 件" in index
