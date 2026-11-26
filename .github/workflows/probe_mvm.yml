@@ -4,8 +4,11 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - "tools/probe_mvm.py"
+      - "tools/dump_mvm_words.py"
       - ".github/workflows/probe_mvm.yml"
+
+permissions:
+  contents: write
 
 jobs:
   probe:
@@ -17,4 +20,12 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install requests pdfplumber
-      - run: python tools/probe_mvm.py
+      - run: |
+          mkdir -p tests/fixtures
+          python tools/dump_mvm_words.py /mediapermalink/fy27p3-mvm2-pdf tests/fixtures/mvm_fy27p3_mvm2_words.json
+      - run: |
+          git config user.name "tw-deal-tracker-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tests/fixtures
+          git diff --cached --quiet || git commit -m "測試資料：會員護照 PDF 文字座標"
+          git push
