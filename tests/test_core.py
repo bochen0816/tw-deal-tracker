@@ -100,7 +100,7 @@ def test_build_site_outputs_and_escaping(tmp_path):
     stats = build_site.build(state, hist, {"date_tw": "2026-11-26"}, str(out), now=NOW)
     assert stats == {"deals": 2, "products": 2, "listed": 2}
     index = (out / "index.html").read_text(encoding="utf-8")
-    assert index.count("</script>") == 2  # 只有本站自己的兩個 script 結尾
+    assert index.count("</script>") == 3  # 只有本站自己的三個 script（特價資料、分類、程式）
     assert "<script>alert(1)" not in index
     assert "非官方" in index
     prod = (out / "p" / "999.html").read_text(encoding="utf-8")
@@ -108,7 +108,8 @@ def test_build_site_outputs_and_escaping(tmp_path):
     assert "<svg" in (out / "p" / "157668.html").read_text(encoding="utf-8")
     assert len(json.loads((out / "all.json").read_text(encoding="utf-8"))) == 2
     assert "157668.html" in (out / "sitemap.xml").read_text(encoding="utf-8")
-    assert (out / ".nojekyll").exists()
+    assert (out / ".nojekyll").exists() and (out / "style.css").exists()
+    assert "style.css" in index and "<style>" not in index
 
 
 def test_svg_chart_single_point():
@@ -118,3 +119,45 @@ def test_svg_chart_single_point():
     import re
     d = re.search(r"d='M([\d.]+),[\d.]+H([\d.]+)", svg)
     assert d and float(d.group(2)) - float(d.group(1)) > 100
+
+
+def test_category_key_from_url():
+    f = build_site.category_key
+    assert f("https://www.costco.com.tw/Sports-Lifestyle/Camping-Outdoors/Coolers/Igloo/p/1872201") == "Sports-Lifestyle"
+    assert f("https://www.costco.com.tw/Food-Dining/x/p/1") == "Food-Dining"
+    assert f("https://www.costco.com.tw/Penfolds/p/1") == "other"  # 品牌頁等非主分類
+    assert f("https://www.costco.com.tw/p/1") == "other"
+    assert f(None) == "other"
+
+
+def test_verdict_texts():
+    p = scraper.normalize(RAW)
+    state, _ = history.update({}, [p], "2026-11-26")
+    say, pts = build_site.verdict(state["157668"], "2026-11-26", NOW)
+    assert say == "正在特價" and "$3,200" in pts[0] and "只有 1 天資料" in pts[-1]
+    # 下架
+    say, _ = build_site.verdict(state["157668"], "2026-11-27", NOW)
+    assert "沒有列出" in say
+    # 追蹤夠久、比最低價貴
+    r = {**state["157668"], "promo_amount": None, "first_seen": "2026-10-01", "min_price": 11000.0, "max_price": 12499.0}
+    say, pts = build_site.verdict(r, "2026-11-26", NOW)
+    assert say == "目前是一般價格" and "貴 $1,499" in pts[-1]
+    # 追蹤夠久、是最低價
+    r = {**r, "min_price": 12499.0, "max_price": 13000.0}
+    say, _ = build_site.verdict(r, "2026-11-26", NOW)
+    assert say == "本站記錄最低價"
+
+
+def test_product_page_related_and_search_data(tmp_path):
+    a = scraper.normalize(RAW)
+    b = scraper.normalize({**RAW, "code": "2", "name": "同類商品", "url": "/Oasis/p/2"})
+    c = scraper.normalize({**RAW, "code": "3", "name": "沒特價", "discountPrice": None, "couponDiscount": None})
+    state, rows = history.update({}, [a, b, c], "2026-11-26")
+    out = tmp_path / "site"
+    build_site.build(state, {}, {"date_tw": "2026-11-26"}, str(out), now=NOW)
+    page_a = (out / "p" / "157668.html").read_text(encoding="utf-8")
+    assert "現在買划算嗎" in page_a and "到好市多官網購買" in page_a and "剩 4 天" in page_a
+    allj = {d["c"]: d for d in json.loads((out / "all.json").read_text(encoding="utf-8"))}
+    assert allj["157668"]["a"] == 3200.0 and allj["3"]["a"] is None and "k" in allj["3"]
+    index = (out / "index.html").read_text(encoding="utf-8")
+    assert "今日特價明細" in index and "共檢查商品" in index
