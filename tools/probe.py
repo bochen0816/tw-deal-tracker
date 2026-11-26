@@ -44,6 +44,33 @@ def main() -> int:
             print(name, "products in page:", len(prods))
             if prods:
                 print(name, "product keys:", sorted(prods[0].keys()))
+                if name == "search_p1_size100_default":
+                    for p in prods[:2]:
+                        print("SAMPLE_PRODUCT_BEGIN")
+                        print(json.dumps(p, ensure_ascii=False, indent=1)[:6000])
+                        print("SAMPLE_PRODUCT_END")
+                    # 統計價格相關欄位出現情況
+                    from collections import Counter
+                    c = Counter()
+                    for p in prods:
+                        for k, v in p.items():
+                            if any(s in k.lower() for s in ("price", "discount", "promo", "coupon", "saving")):
+                                c[k] += 1
+                    print("PRICE_FIELD_COUNTS", dict(c))
+                    # 印出有折扣欄位的一個例子
+                    for p in prods:
+                        if any(k for k in p if "discount" in k.lower() or "coupon" in k.lower() or "promo" in k.lower()):
+                            print("DISCOUNT_EXAMPLE_BEGIN")
+                            print(json.dumps(p, ensure_ascii=False, indent=1)[:6000])
+                            print("DISCOUNT_EXAMPLE_END")
+                            break
+            if name == "search_p0_size100_full":
+                for f in data.get("facets", []):
+                    print("FACET", f.get("name"), f.get("displayName"), [(v.get("name"), v.get("count")) for v in f.get("values", [])][:30])
+                if prods:
+                    print("FULL_SAMPLE_BEGIN")
+                    print(json.dumps(prods[0], ensure_ascii=False, indent=1)[:8000])
+                    print("FULL_SAMPLE_END")
         except Exception as e:  # noqa: BLE001
             print(name, "not json", repr(e))
         time.sleep(3)
